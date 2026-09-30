@@ -11,8 +11,9 @@ import { randomUUID } from 'node:crypto'
 
 import { type Config, type CapabilityBinding } from './config.js'
 import { type ArtifactName, type RenderReport, type Script } from './schema.js'
-import { type ProjectLayout, ensureDir, pathExists } from './project.js'
+import { type ProjectLayout, ensureDir, pathExists, resolveInProject } from './project.js'
 import { composeProject } from './compose.js'
+import { mediaKindOf, mediaUrl } from './routes.js'
 import {
   type Stage,
   STAGES,
@@ -32,6 +33,8 @@ export interface ToolDefinition {
   output: {
     schema: Record<string, unknown>
     render(args: unknown, value: unknown): unknown[]
+    /** 结构化负载，供工具调用的 media 卡片渲染。文本是转录保留的，卡片画的是这个。 */
+    presentationMeta?(args: unknown, value: unknown): unknown
   }
   timeoutMs?: number
   execute(args: Record<string, unknown>, exec: ToolRunContext): Promise<unknown>
@@ -378,6 +381,81 @@ function composeDefinition(runtime: PluginRuntime): ToolDefinition {
   }
 }
 
+/* ------------------------------------------------------ workbench_show */
+
+function showDefinition(runtime: PluginRuntime): ToolDefinition {
+  return {
+    name: 'workbench_show',
+    description:
+      '把项目里的媒体放进对话给用户看：成片、配音、画面，任何已在项目里的文件。'
+      + '路径是项目内相对路径（如 output/film.mp4、assets/s1-image-xxxx.png）。'
+      + '它只展示已存在的文件——不生成、不导入、不记录任何东西。',
+    parameters: {
+      type: 'object',
+      properties: {
+        project: { type: 'string' },
+        paths: { type: 'array', items: { type: 'string' } },
+        note: { type: 'string', description: '可选，一行说明显示在媒体上方。' },
+      },
+      required: ['project', 'paths'],
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => {
+        const data = value as { note?: string; items: Array<{ name: string; kind: string; bytes: number }> }
+        const lines = data.note === undefined ? [] : [data.note]
+        for (const item of data.items) {
+          lines.push('  ' + item.name + '  ' + item.kind + '  ' + Math.round(item.bytes / 1024) + ' KB')
+        }
+        return text(lines.join('\n'))
+      },
+      presentationMeta: (_args, value) => {
+        const data = value as { project: string; items: unknown[]; note?: string }
+        return {
+          kind: 'media',
+          project: data.project,
+          items: data.items,
+          ...(data.note === undefined ? {} : { note: data.note }),
+        }
+      },
+    },
+    timeoutMs: 30_000,
+    async execute(args, _exec) {
+      const projectId = requireString(args, 'project')
+      const paths = args.paths
+      if (!Array.isArray(paths) || paths.length === 0) {
+        throw new StateViolationError('BAD_REQUEST', 'paths must be a non-empty array')
+      }
+      const { layout } = await runtime.machine.requireProject(projectId)
+      const items: Array<{ path: string; name: string; kind: string; bytes: number; url: string }> = []
+      for (const entry of paths) {
+        if (typeof entry !== 'string' || entry.trim() === '') continue
+        const relative = entry.trim()
+        const absolute = resolveInProject(layout, relative)
+        if (!(await pathExists(absolute))) {
+          throw new StateViolationError('BAD_REQUEST', 'no such file in the project: ' + relative)
+        }
+        const stat = await fs.stat(absolute)
+        items.push({
+          path: relative,
+          name: relative.split('/').pop() ?? relative,
+          kind: mediaKindOf(relative),
+          bytes: stat.size,
+          url: mediaUrl(projectId, relative),
+        })
+      }
+      if (items.length === 0) {
+        throw new StateViolationError('BAD_REQUEST', 'none of the given paths named a file')
+      }
+      return {
+        project: projectId,
+        items,
+        ...(optionalString(args, 'note') === undefined ? {} : { note: optionalString(args, 'note') }),
+      }
+    },
+  }
+}
+
 /* ------------------------------------------------------------- registry */
 
 export function registerWorkbenchTools(ctx: unknown, runtime: PluginRuntime): Array<() => void> {
@@ -386,5 +464,6 @@ export function registerWorkbenchTools(ctx: unknown, runtime: PluginRuntime): Ar
     tools.register(projectDefinition(runtime)),
     tools.register(stageDefinition(runtime)),
     tools.register(composeDefinition(runtime)),
+    tools.register(showDefinition(runtime)),
   ]
 }

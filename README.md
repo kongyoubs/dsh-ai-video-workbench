@@ -47,6 +47,7 @@ brief ──[闸]──> script ──[闸]──> assets ──[闸]──> com
 | `workbench_project` | 项目与文件：init / status / list / get / import / bindings |
 | `workbench_stage` | **推进状态的唯一入口**，每次写入都做 schema/闸/前置/素材校验 |
 | `workbench_compose` | FFmpeg 渲染并返回报告（不推进状态） |
+| `workbench_show` | 把项目里的成片/素材放进对话给用户预览 |
 
 ## 技能（Agent 读）
 

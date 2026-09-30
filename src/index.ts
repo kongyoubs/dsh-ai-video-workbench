@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './config.js'
 import { probeDuration } from './compose.js'
 import { resolveWorkspaceRoot } from './project.js'
+import { mountWorkbenchRoutes } from './routes.js'
 import { buildSkills } from './skills.js'
 import { StateMachine } from './state.js'
 import { type PluginRuntime, registerWorkbenchTools } from './tools.js'
@@ -43,6 +44,14 @@ export function apply(ctx: Context, config: Config): void {
       for (const dispose of disposers.reverse()) dispose()
     }
   }, 'dsh-ai-video-workbench: tools')
+
+  // 媒体路由：workbench_show 的 media 卡片数据面。webServer 可能晚于本插件到达，用 inject 而非 get。
+  ctx.inject(['webServer'], (webCtx: Context) => {
+    webCtx.effect(() => {
+      const dispose = mountWorkbenchRoutes(webCtx, runtime)
+      return () => dispose?.()
+    }, 'dsh-ai-video-workbench: routes')
+  })
 
   let skillDisposers: Array<() => void> = []
 
