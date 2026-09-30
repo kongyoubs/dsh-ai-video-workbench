@@ -1,6 +1,6 @@
 # dsh-ai-video-workbench
 
-**AI 视频创作工作台 · DeepSeek Harness 插件版**：四段带审批闸的管线（`brief → script → assets → compose`），把一句话变成一条带配音、配图、字幕的解说片。生成走 **dsh-comfyui** 工作流，合成走 **FFmpeg**。
+**AI 视频创作工作台 · DeepSeek Harness 插件版**：把一句话变成一条带配音、配图、字幕的解说片。生成走 **dsh-comfyui** 工作流，合成走 **FFmpeg**。
 
 ## 安装
 
