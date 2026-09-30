@@ -1,0 +1,4 @@
+# dsh-ai-video-workbench bundle patch: 把插件插入 profile 的插件层栈。
+- insert:
+    - id: workbench
+      name: 'dsh-ai-video-workbench'
