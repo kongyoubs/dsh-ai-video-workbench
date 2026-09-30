@@ -53,21 +53,17 @@ export function apply(ctx: Context, config: Config): void {
     }, 'dsh-ai-video-workbench: routes')
   })
 
-  let skillDisposers: Array<() => void> = []
-
-  function mountSkills(): void {
-    for (const dispose of skillDisposers.reverse()) dispose()
-    skillDisposers = []
-    const skills = ctx.get('skills') as SkillsService | undefined
+  // 技能：用依赖注入而非一次性 get，skills 服务晚于本插件到达时也能注册。
+  ctx.inject(['skills'], (skillsCtx: Context) => {
+    const skills = skillsCtx.get('skills') as SkillsService | undefined
     if (skills === undefined) return
-    skillDisposers = buildSkills(resolved).map((skill) => skills.register(skill))
-  }
-
-  ctx.effect(() => {
-    mountSkills()
-    return () => {
-      for (const dispose of skillDisposers.reverse()) dispose()
-      skillDisposers = []
-    }
-  }, 'dsh-ai-video-workbench: skills')
+    let skillDisposers: Array<() => void> = []
+    skillsCtx.effect(() => {
+      skillDisposers = buildSkills(resolved).map((skill) => skills.register(skill))
+      return () => {
+        for (const dispose of skillDisposers.reverse()) dispose()
+        skillDisposers = []
+      }
+    }, 'dsh-ai-video-workbench: skills')
+  })
 }

@@ -21,6 +21,8 @@ export interface ProjectMarker {
   language: string
   voice: string
   target_platform: string
+  /** 显式画幅：16:9 / 9:16 / 3:4。平台只能给默认值，不能代替画幅。 */
+  aspect_ratio: string
 }
 
 export interface ProjectLayout {
@@ -45,7 +47,19 @@ export class ProjectError extends Error {
   }
 }
 
+/** 校验项目 / 分镜 / 资产 ID：拒绝空、路径分隔符、点路径与控制字符。 */
+export function validateId(id: string, label: string): void {
+  if (id.trim() === '') throw new ProjectError(label + ' must not be empty')
+  if (/[/\\]/.test(id)) throw new ProjectError(label + ' must not contain path separators: ' + id)
+  if (id === '.' || id === '..' || id.includes('..')) {
+    throw new ProjectError(label + ' must not contain dot segments: ' + id)
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(id)) throw new ProjectError(label + ' must not contain control characters: ' + id)
+}
+
 export function projectLayout(root: string, id: string): ProjectLayout {
+  validateId(id, 'project id')
   const dir = join(root, id)
   return {
     id,
@@ -120,18 +134,28 @@ export async function listProjects(root: string): Promise<ProjectSummary[]> {
 }
 
 /**
- * 把项目内相对路径解析成绝对路径。拒绝绝对路径与 `..`，防止越界。
+ * 把项目内相对路径解析成绝对路径。拒绝绝对路径、UNC、根路径、`..`，
+ * 并校验解析结果仍在项目目录内，防止越界。
  */
 export function resolveInProject(layout: ProjectLayout, relative: string): string {
   if (relative === '') throw new ProjectError('empty path')
-  if (relative.startsWith('/') || /^[A-Za-z]:/.test(relative)) {
+  if (
+    relative.startsWith('/')
+    || relative.startsWith('\\')
+    || relative.startsWith('//')
+    || /^[A-Za-z]:/.test(relative)
+  ) {
     throw new ProjectError('absolute paths are not allowed: ' + relative)
   }
   const segments = relative.split(/[/\\]/)
-  if (segments.some((segment) => segment === '..')) {
+  if (segments.includes('..')) {
     throw new ProjectError('".." is not allowed: ' + relative)
   }
-  return join(layout.dir, relative)
+  const resolved = resolve(layout.dir, relative)
+  if (resolved !== layout.dir && !resolved.startsWith(layout.dir + sep)) {
+    throw new ProjectError('path escapes the project: ' + relative)
+  }
+  return resolved
 }
 
 export function toProjectRelative(layout: ProjectLayout, absolute: string): string {

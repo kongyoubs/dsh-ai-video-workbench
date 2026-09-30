@@ -62,6 +62,12 @@ export interface RenderReport {
   version: string
   outputs: RenderOutput[]
   timeline: Array<{ scene_id: string; start: number; duration: number }>
+  /** SRT sidecar 的项目内相对路径（未生成时为 undefined）。 */
+  subtitle_path?: string
+  /** 字幕是否已烧进画面。 */
+  subtitles_burned?: boolean
+  /** 非致命降级提示。 */
+  warnings?: string[]
 }
 
 export interface Issue {
@@ -72,6 +78,8 @@ export interface Issue {
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
+import { validateId } from './project.js'
 
 function isStr(value: unknown): value is string {
   return typeof value === 'string'
@@ -93,7 +101,9 @@ function validateBrief(value: unknown): Issue[] {
   const issues: Issue[] = []
   if (!isStr(b.title) || b.title.trim() === '') issues.push({ path: 'brief.title', message: 'title is required' })
   if (!isStr(b.theme) || b.theme.trim() === '') issues.push({ path: 'brief.theme', message: 'theme is required' })
-  if (!isNum(b.target_duration_seconds)) issues.push({ path: 'brief.target_duration_seconds', message: 'must be a number' })
+  if (!isNum(b.target_duration_seconds) || b.target_duration_seconds <= 0 || b.target_duration_seconds > 1800) {
+    issues.push({ path: 'brief.target_duration_seconds', message: 'must be a positive number <= 1800' })
+  }
   if (!isStr(b.target_platform)) issues.push({ path: 'brief.target_platform', message: 'target_platform is required' })
   return issues
 }
@@ -119,7 +129,12 @@ function validateScript(value: unknown): Issue[] {
     } else if (seen.has(id)) {
       issues.push({ path: `script.sections[${index}].id`, message: `duplicate id ${JSON.stringify(id)}` })
     } else {
-      seen.add(id)
+      try {
+        validateId(id, 'section id')
+        seen.add(id)
+      } catch (error) {
+        issues.push({ path: `script.sections[${index}].id`, message: (error as Error).message })
+      }
     }
     if (!isStr(section.narration) || section.narration.trim() === '') {
       issues.push({ path: `script.sections[${index}].narration`, message: 'narration is required' })
@@ -143,6 +158,7 @@ function validateAssetManifest(value: unknown): Issue[] {
     issues.push({ path: 'asset_manifest.assets', message: 'must be an array' })
     return issues
   }
+  const seenIds = new Set<string>()
   for (const [index, asset] of m.assets.entries()) {
     if (!isRecord(asset)) {
       issues.push({ path: `asset_manifest.assets[${index}]`, message: 'must be an object' })
@@ -150,6 +166,10 @@ function validateAssetManifest(value: unknown): Issue[] {
     }
     if (!isStr(asset.id) || asset.id.trim() === '') {
       issues.push({ path: `asset_manifest.assets[${index}].id`, message: 'id is required' })
+    } else if (seenIds.has(asset.id)) {
+      issues.push({ path: `asset_manifest.assets[${index}].id`, message: `duplicate asset id ${JSON.stringify(asset.id)}` })
+    } else {
+      seenIds.add(asset.id)
     }
     if (!isStr(asset.type) || !ASSET_TYPES.has(asset.type)) {
       issues.push({ path: `asset_manifest.assets[${index}].type`, message: `type must be one of ${[...ASSET_TYPES].join(' | ')}` })
@@ -159,6 +179,9 @@ function validateAssetManifest(value: unknown): Issue[] {
     }
     if (!isStr(asset.path) || asset.path.trim() === '') {
       issues.push({ path: `asset_manifest.assets[${index}].path`, message: 'path is required' })
+    }
+    if (asset.duration_seconds !== undefined && !isNum(asset.duration_seconds)) {
+      issues.push({ path: `asset_manifest.assets[${index}].duration_seconds`, message: 'must be a finite number when present' })
     }
   }
   return issues

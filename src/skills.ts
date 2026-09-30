@@ -54,6 +54,7 @@ ${gates} 个闸都排在花钱之前：brief / script 挡住「脚本没定就�
 - \`workbench_project\` —— 项目与文件：init / status / list / get / import / bindings。**不推进状态。**
 - \`workbench_stage\` —— **推进状态的唯一入口**。每次写入都会被检查。
 - \`workbench_compose\` —— 渲染成片并返回报告。**不推进状态**，报告要经 workbench_stage 记录。
+- \`workbench_show\` —— 把项目里的成片/素材放进对话给用户看。**只展示，不生成、不导入、不记录。**
 
 ## 红线
 
@@ -71,6 +72,9 @@ ${gates} 个闸都排在花钱之前：brief / script 挡住「脚本没定就�
 
 直接写 \`completed\` 会被 \`GATE VIOLATION\` 挡回来。用户没说「可以/继续/就这样」之前，
 \`human_approved\` 永远是 false。
+
+> 说明：\`human_approved\` 是 Agent 协议约束（防止漏填），不是宿主强授权——它由你按对话内容如实填写。
+> 若宿主提供了可信确认入口，应由那个入口产生审批记录，而不是只靠这个布尔值。
 
 **重写早期阶段会作废后续阶段。** 用户在素材做完之后改脚本，后面几段必须重做。
 
@@ -119,11 +123,12 @@ ${renderBinding('配乐（音乐）', config.bindings.music)}
 export function buildUsageSkill(): RuntimeSkill {
   const content = `# AI 视频创作工作台：工具契约
 
-三个工具，一个写入口：
+四个工具，一个写入口：
 
 - \`workbench_project\`：项目与文件。action 有 init / status / list / get / import / bindings。
 - \`workbench_stage\`：推进状态。project + stage + status，artifact 包在 artifacts 里。
 - \`workbench_compose\`：渲染。project + 可选 burn_subtitles，返回 render_report，不推进状态。
+- \`workbench_show\`：展示。project + paths，把项目里的媒体放进对话，只读不写。
 
 ## 报错怎么处置
 

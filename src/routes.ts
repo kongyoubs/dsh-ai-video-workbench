@@ -60,23 +60,61 @@ function queryOf(request: IncomingMessage): URLSearchParams {
   return new URLSearchParams(raw)
 }
 
+type RangeResult = { start: number; end: number } | 'invalid' | null
+
+/** 解析合法单范围请求；非法返回 'invalid'，无范围返回 null。 */
+function parseRange(range: string, size: number): RangeResult {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim())
+  if (match === null) return 'invalid'
+  const [, startRaw, endRaw] = match
+  if (startRaw === '' && endRaw === '') return 'invalid'
+  if (startRaw === '') {
+    // 后缀范围：bytes=-500 → 末尾 500 字节
+    const suffix = parseInt(endRaw!, 10)
+    if (!Number.isFinite(suffix) || suffix <= 0) return 'invalid'
+    return { start: Math.max(0, size - suffix), end: size - 1 }
+  }
+  const start = parseInt(startRaw!, 10)
+  if (!Number.isFinite(start) || start < 0 || start >= size) return 'invalid'
+  let end = endRaw === '' ? size - 1 : parseInt(endRaw!, 10)
+  if (!Number.isFinite(end) || end < start) return 'invalid'
+  end = Math.min(end, size - 1)
+  return { start, end }
+}
+
 async function sendFile(request: IncomingMessage, response: ServerResponse, absolutePath: string): Promise<void> {
   const stat = await fs.stat(absolutePath)
-  const range = request.headers.range
   const mime = mimeOf(absolutePath)
 
+  if (request.method === 'HEAD') {
+    response.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Length': stat.size,
+      'Accept-Ranges': 'bytes',
+    })
+    response.end()
+    return
+  }
+
+  const range = request.headers.range
   if (range !== undefined) {
-    const match = /bytes=(\d*)-(\d*)/.exec(range)
-    if (match !== null) {
-      const start = match[1] === '' ? 0 : parseInt(match[1]!, 10)
-      const end = match[2] === '' ? stat.size - 1 : Math.min(parseInt(match[2]!, 10), stat.size - 1)
+    const parsed = parseRange(range, stat.size)
+    if (parsed === 'invalid') {
+      response.writeHead(416, { 'Content-Range': `bytes */${stat.size}` })
+      response.end()
+      return
+    }
+    if (parsed !== null) {
+      const { start, end } = parsed
       response.writeHead(206, {
         'Content-Type': mime,
         'Content-Range': `bytes ${start}-${end}/${stat.size}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': end - start + 1,
       })
-      createReadStream(absolutePath, { start, end }).pipe(response)
+      const stream = createReadStream(absolutePath, { start, end })
+      stream.on('error', () => response.destroy())
+      stream.pipe(response)
       return
     }
   }
@@ -86,7 +124,9 @@ async function sendFile(request: IncomingMessage, response: ServerResponse, abso
     'Content-Length': stat.size,
     'Accept-Ranges': 'bytes',
   })
-  createReadStream(absolutePath).pipe(response)
+  const stream = createReadStream(absolutePath)
+  stream.on('error', () => response.destroy())
+  stream.pipe(response)
 }
 
 export function mountWorkbenchRoutes(ctx: Context, runtime: PluginRuntime): (() => void) | undefined {

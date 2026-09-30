@@ -6,8 +6,10 @@
  * 报告要经 `workbench_stage` 的检查才被记录。单一写入口是治理成立的前提。
  */
 import { extname, join } from 'node:path'
-import { promises as fs } from 'node:fs'
+import { createWriteStream, promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 
 import { type Config, type CapabilityBinding } from './config.js'
 import { type ArtifactName, type RenderReport, type Script } from './schema.js'
@@ -125,7 +127,8 @@ function projectDefinition(runtime: PluginRuntime): ToolDefinition {
         target_duration_seconds: { type: 'number', description: 'init: 成片目标时长。' },
         style: { type: 'string', description: 'init: 视觉风格。' },
         voice: { type: 'string', description: 'init: 配音音色，按 TTS 工作流的参数选项精确命名。' },
-        language: { type: 'string', description: 'init: 语种（zh/en）。' },
+        language: { type: 'string', description: 'init: 语种（zh/en），省略用配置默认。' },
+        aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '3:4'], description: 'init: 画幅，默认 16:9。' },
         artifact: { type: 'string', enum: ['brief', 'script', 'asset_manifest', 'render_report'] },
         items: {
           type: 'array',
@@ -144,7 +147,7 @@ function projectDefinition(runtime: PluginRuntime): ToolDefinition {
     },
     output: { schema: { type: 'object' }, render: (_args, value) => text(JSON.stringify(value, null, 2)) },
     timeoutMs: 120_000,
-    async execute(args, _exec) {
+    async execute(args, exec) {
       const action = requireString(args, 'action')
       const machine = runtime.machine
       const config = runtime.getConfig()
@@ -168,7 +171,8 @@ function projectDefinition(runtime: PluginRuntime): ToolDefinition {
           ...(optionalString(args, 'id') !== undefined ? { id: optionalString(args, 'id')! } : {}),
           ...(optionalString(args, 'style') !== undefined ? { style: optionalString(args, 'style')! } : {}),
           ...(optionalString(args, 'voice') !== undefined ? { voice: optionalString(args, 'voice')! } : {}),
-          ...(optionalString(args, 'language') !== undefined ? { language: optionalString(args, 'language')! } : {}),
+          language: optionalString(args, 'language') ?? config.language,
+          aspectRatio: optionalString(args, 'aspect_ratio') ?? '16:9',
         })
         return {
           action,
@@ -202,12 +206,11 @@ function projectDefinition(runtime: PluginRuntime): ToolDefinition {
         if (!Array.isArray(items) || items.length === 0) {
           throw new StateViolationError('BAD_REQUEST', 'import needs a non-empty items array')
         }
+        // 导入素材要求 brief + script 已完成且批准（见 assertReadyForAssets）
+        await machine.assertReadyForAssets(projectId)
         const { layout } = await machine.requireProject(projectId)
         const script = await machine.readArtifact<Script>(layout, 'script')
-        if (script === undefined) {
-          throw new StateViolationError('PREREQUISITE_VIOLATION', 'cannot import assets before the script exists')
-        }
-        const sceneIds = new Set(script.sections.map((section) => section.id))
+        const sceneIds = new Set((script?.sections ?? []).map((section) => section.id))
 
         const imported: Array<{ kind: string; scene_id: string; path: string; bytes: number }> = []
         for (const [index, item] of items.entries()) {
@@ -225,7 +228,7 @@ function projectDefinition(runtime: PluginRuntime): ToolDefinition {
             throw new StateViolationError('BAD_REQUEST', "scene_id '" + sceneId + "' is not in the script")
           }
 
-          const bytes = await copySource(source, layout.assetsDir, kind, sceneId)
+          const bytes = await copySource(source, layout.assetsDir, kind, exec.signal)
           const rel = 'assets/' + bytes.filename
           imported.push({ kind, scene_id: sceneId, path: rel, bytes: bytes.size })
         }
@@ -237,29 +240,35 @@ function projectDefinition(runtime: PluginRuntime): ToolDefinition {
   }
 }
 
-/** 把本地路径或 http(s) URL 复制进素材目录，返回文件名与大小。 */
-async function copySource(source: string, assetsDir: string, kind: string, sceneId: string): Promise<{ filename: string; size: number }> {
-  let data: Uint8Array
-  let ext: string
+/** 单条导入的大小上限。 */
+const MAX_IMPORT_BYTES = 512 * 1024 * 1024
+
+/** 把本地路径或 http(s) URL 流式复制进素材目录，返回文件名与大小。文件名只用 UUID，scene_id 存元数据。 */
+async function copySource(source: string, assetsDir: string, kind: string, signal: AbortSignal): Promise<{ filename: string; size: number }> {
+  const ext = /^https?:\/\//.test(source) ? extname(new URL(source).pathname) : extname(source)
+  const filename = `${kind}-${randomUUID().slice(0, 8)}${ext}`
+  const dest = join(assetsDir, filename)
+  await ensureDir(assetsDir)
 
   if (/^https?:\/\//.test(source)) {
-    const resp = await fetch(source, { signal: AbortSignal.timeout(180_000) })
-    if (!resp.ok) throw new StateViolationError('BAD_REQUEST', 'download failed ' + resp.status + ' ' + source)
-    data = new Uint8Array(await resp.arrayBuffer())
-    ext = extname(new URL(source).pathname) || '.bin'
+    const resp = await fetch(source, { signal })
+    if (!resp.ok || resp.body === null) {
+      throw new StateViolationError('BAD_REQUEST', 'download failed ' + resp.status + ' ' + source)
+    }
+    await pipeline(Readable.fromWeb(resp.body as ReadableStream), createWriteStream(dest), { signal })
   } else {
     if (!(await pathExists(source))) {
       throw new StateViolationError('BAD_REQUEST', 'no such file: ' + source)
     }
-    data = await fs.readFile(source)
-    ext = extname(source)
+    await fs.copyFile(source, dest)
   }
 
-  const stem = sceneId !== '' ? `${sceneId}-${kind}` : kind
-  const filename = `${stem}-${randomUUID().slice(0, 8)}${ext}`
-  await ensureDir(assetsDir)
-  await fs.writeFile(join(assetsDir, filename), data)
-  return { filename, size: data.byteLength }
+  const stat = await fs.stat(dest)
+  if (stat.size > MAX_IMPORT_BYTES) {
+    await fs.rm(dest, { force: true })
+    throw new StateViolationError('BAD_REQUEST', 'imported file too large: ' + stat.size + ' bytes')
+  }
+  return { filename, size: stat.size }
 }
 
 /* ------------------------------------------------------- workbench_stage */

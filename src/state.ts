@@ -168,6 +168,7 @@ export class StateMachine {
     style?: string
     language?: string
     voice?: string
+    aspectRatio?: string
   }): Promise<{ layout: ProjectLayout; marker: ProjectMarker; existed: boolean }> {
     const id = input.id ?? slugify(input.title)
     const layout = this.layout(id)
@@ -185,6 +186,7 @@ export class StateMachine {
       language: input.language ?? 'zh',
       voice: input.voice ?? '',
       target_platform: '',
+      aspect_ratio: input.aspectRatio ?? '16:9',
     }
     await ensureLayout(layout)
     await writeMarker(layout, marker)
@@ -198,6 +200,7 @@ export class StateMachine {
     language?: string
     voice?: string
     targetPlatform?: string
+    aspectRatio?: string
   }): Promise<ProjectMarker> {
     return this.serialize(projectId, async () => {
       const { layout, marker } = await this.requireProject(projectId)
@@ -209,6 +212,7 @@ export class StateMachine {
         ...(patch.language !== undefined ? { language: patch.language } : {}),
         ...(patch.voice !== undefined ? { voice: patch.voice } : {}),
         ...(patch.targetPlatform !== undefined ? { target_platform: patch.targetPlatform } : {}),
+        ...(patch.aspectRatio !== undefined ? { aspect_ratio: patch.aspectRatio } : {}),
       }
       await writeMarker(layout, updated)
       return updated
@@ -285,6 +289,31 @@ export class StateMachine {
     return { project: marker, stages, next_stage: nextStage, awaiting_approval: awaiting }
   }
 
+  /* ------------------------------------------------------------ 前置断言 */
+
+  async assertStageCompletedApproved(projectId: string, stage: Stage): Promise<void> {
+    const { layout } = await this.requireProject(projectId)
+    const checkpoint = await this.readCheckpoint(layout, stage)
+    if (checkpoint === undefined || checkpoint.status !== 'completed') {
+      throw new StateViolationError('PREREQUISITE_VIOLATION', "stage '" + stage + "' must be completed first")
+    }
+    if (GATED_STAGES.has(stage) && !checkpoint.human_approved) {
+      throw new StateViolationError('PREREQUISITE_VIOLATION', "stage '" + stage + "' requires human approval")
+    }
+  }
+
+  /** 导入素材前：brief 与 script 必须已完成且批准。 */
+  async assertReadyForAssets(projectId: string): Promise<void> {
+    await this.assertStageCompletedApproved(projectId, 'brief')
+    await this.assertStageCompletedApproved(projectId, 'script')
+  }
+
+  /** 合成前：brief / script / assets 必须已完成且批准。 */
+  async assertReadyForCompose(projectId: string): Promise<void> {
+    await this.assertReadyForAssets(projectId)
+    await this.assertStageCompletedApproved(projectId, 'assets')
+  }
+
   /* ----------------------------------------------------------------- write */
 
   async write(request: WriteRequest): Promise<WriteResult> {
@@ -305,11 +334,11 @@ export class StateMachine {
       )
     }
 
-    // 1. 结构校验
+    // 1. 结构校验：每个阶段只接受自己的 canonical 工件，额外键直接拒绝。
     const issues: Issue[] = []
     for (const [name, value] of Object.entries(request.artifacts)) {
-      if (!Object.values(STAGE_ARTIFACT).includes(name as ArtifactName)) {
-        issues.push({ path: name, message: 'unknown artifact' })
+      if (name !== STAGE_ARTIFACT[stage]) {
+        issues.push({ path: name, message: `stage '${stage}' only accepts its canonical artifact '${STAGE_ARTIFACT[stage]}'` })
         continue
       }
       issues.push(...validateArtifact(name as ArtifactName, value))
@@ -349,10 +378,11 @@ export class StateMachine {
       await this.enforcePrerequisites(layout, stage)
     }
 
-    // 4. 重写前序阶段会让后面全部作废
-    const invalidated = needsArtifact ? await this.invalidateSuccessors(layout, stage) : []
+    // 4. 只要写了本阶段的 canonical 工件（内容变化），就作废其后所有阶段；
+    //    单纯改状态（不带工件）不作废。
+    const invalidated = request.artifacts[canonical] !== undefined ? await this.invalidateSuccessors(layout, stage) : []
     if (invalidated.length > 0) {
-      notices.push('discarded later stage(s) ' + invalidated.join(', ') + ' because ' + stage + ' was rewritten; they must be redone')
+      notices.push('discarded later stage(s) ' + invalidated.join(', ') + ' because ' + stage + ' content changed; they must be redone')
     }
 
     // 5. 先落工件，再落指向它的检查点
@@ -452,8 +482,8 @@ export class StateMachine {
         continue
       }
       const duration = await this.deps.probeDuration(absolute)
-      if (duration === undefined) {
-        missing.push(asset.id + ' -> ' + asset.path + ' (exists but ffprobe could not read a duration)')
+      if (duration === undefined || !Number.isFinite(duration) || duration <= 0) {
+        missing.push(asset.id + ' -> ' + asset.path + ' (exists but ffprobe could not read a valid positive duration)')
         continue
       }
       if (asset.duration_seconds !== undefined && Math.abs(asset.duration_seconds - duration) > 0.05) {
@@ -526,9 +556,22 @@ export class StateMachine {
     for (const successor of STAGES.slice(stageIndex(stage) + 1)) {
       const checkpoint = await this.readCheckpoint(layout, successor).catch(() => undefined)
       if (checkpoint === undefined) continue
+      await this.archiveCheckpoint(layout, successor, checkpoint)
       await fs.rm(this.checkpointPath(layout, successor), { force: true })
       invalidated.push(successor)
     }
     return invalidated
+  }
+
+  /** 把被作废的检查点归档到 history/，审计用；失败不阻断。 */
+  private async archiveCheckpoint(layout: ProjectLayout, stage: Stage, checkpoint: Checkpoint): Promise<void> {
+    try {
+      const stamp = checkpoint.timestamp.replace(/[:.]/g, '-')
+      const historyDir = join(layout.dir, 'history')
+      await ensureDir(historyDir)
+      await writeJsonAtomic(join(historyDir, stage + '-' + stamp + '.json'), checkpoint)
+    } catch {
+      // 归档是审计便利，失败不能阻断写入
+    }
   }
 }
