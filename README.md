@@ -2,6 +2,8 @@
 
 **AI 视频创作工作台 · DeepSeek Harness 插件版**：把一句话变成一条带配音、配图、字幕的解说片。生成走 **dsh-comfyui** 工作流，合成走 **FFmpeg**。
 
+**定位：对话驱动管线。** 用自然语言说想法，Agent 通过工具推进状态机、调用 dsh-comfyui 生成、FFmpeg 合成成片。本插件是纯管线内核（状态机 + 工具 + 技能），不包含画布或网页面板。
+
 ## 安装
 
 前置：DeepSeek Harness、[dsh-comfyui](https://github.com/fandc520/dsh-comfyui) ≥ 0.4.0、Node ≥ 22.19、PATH 上的 `ffmpeg` / `ffprobe`。
