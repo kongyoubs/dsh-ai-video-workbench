@@ -63,7 +63,7 @@ src/
 ├── state.ts        # 状态机（闸门 + 前置 + 校验 + 作废）
 ├── schema.ts       # brief/script/asset_manifest/render_report 结构与校验
 ├── project.ts      # 工作区目录布局 + 项目 marker
-├── tools.ts        # 三个工具定义
+├── tools.ts        # 四个工具定义（project / stage / compose / show）
 ├── compose.ts      # FFmpeg 合成（Ken Burns / 视频循环 + 旁白 + 配乐 + 字幕）
 └── skills.ts       # 运行时技能
 ```

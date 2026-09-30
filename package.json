@@ -1,7 +1,7 @@
 {
   "name": "dsh-ai-video-workbench",
   "version": "0.1.0",
-  "description": "AI 视频创作工作台 DSH 插件：四段带审批闸的管线（brief → script → assets → compose），把一句话变成一条带配音、配图与字幕的解说片；生成走 dsh-comfyui，合成走 FFmpeg。",
+  "description": "AI 视频创作工作台 DSH 插件：把一句话变成一条带配音、配图与字幕的解说片。生成走 dsh-comfyui 工作流，合成走 FFmpeg。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
