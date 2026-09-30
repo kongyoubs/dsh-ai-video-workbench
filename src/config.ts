@@ -11,7 +11,7 @@ import z from '@deepseek-ai/schemastery'
 
 /** 每项生成能力由哪条 ComfyUI 工作流承担。 */
 export interface CapabilityBinding {
-  /** 候选工作流名，第一条是默认。填名称不填 id（id 每次重新提取画布都会变）。 */
+  /** 候选工作流名，第一条是默认。填名称不填 id（id 每次重新解析 ComfyUI 工作流都会变）。 */
   workflows: string[]
   /** 给 Agent 的额外提示，原样出现在技能里。 */
   notes: string
